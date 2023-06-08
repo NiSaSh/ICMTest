@@ -1,6 +1,10 @@
 use super::*;
 use crate::sliceop::*;
 use std::mem::MaybeUninit;
+use std::cmp::Ordering;
+use std::thread;
+use std::time::Duration;
+
 
 #[inline]
 fn min(x: f64, y: f64) -> f64 {
@@ -8,6 +12,29 @@ fn min(x: f64, y: f64) -> f64 {
         x
     } else {
         y
+    }
+}
+
+
+fn lookup(value: f64) -> f64 {
+    let lookup_table_keys: Vec<f64> = vec![0.0,100.0, 300.0, 500.0, 700.0, 900.0, 1100.0, 1300.0, 1500.0, 1700.0, 1900.0, 2100.0, 2300.0, 2500.0, 2700.0, 2900.0, 3100.0, 3300.0, 3500.0, 3700.0, 3900.0, 4100.0, 4300.0, 4500.0, 4700.0, 4900.0, 5000.0];
+    let lookup_table_values: Vec<f64> = vec![0.0,3.14, 9.23, 15.1, 20.73, 26.16, 31.41, 36.49, 41.41, 46.17, 50.8, 55.29, 59.67, 63.93, 68.09, 72.15, 76.12, 80.0, 83.81, 87.55, 91.21, 94.81, 98.35, 101.84, 105.27, 108.65, 110.33];
+
+    match lookup_table_keys.binary_search_by(|&probe| probe.partial_cmp(&value).unwrap_or(Ordering::Less)) {
+        Ok(index) => lookup_table_values[index],
+        Err(index) => {
+            if index == 0 {
+                lookup_table_values[0]
+            } else if index == lookup_table_keys.len() {
+                lookup_table_values[index - 1]
+            } else {
+                let lower_value = lookup_table_values[index - 1];
+                let upper_value = lookup_table_values[index];
+                let lower_bound = lookup_table_keys[index - 1];
+                let upper_bound = lookup_table_keys[index];
+                lower_value + (upper_value - lower_value) * ((value - lower_bound) / (upper_bound - lower_bound))
+            }
+        }
     }
 }
 
@@ -21,9 +48,16 @@ impl PostFlopGame {
     ) {
         let pot = (self.tree_config.starting_pot + 2 * node.amount) as f64;
         let half_pot = 0.5 * pot;
+        let original_icm_val =  lookup(2400.0);
         let rake = min(pot * self.tree_config.rake_rate, self.tree_config.rake_cap);
-        let amount_win = (half_pot - rake) / self.num_combinations;
-        let amount_lose = -half_pot / self.num_combinations;
+        let mut amount_lose = -(original_icm_val - lookup(2400.0 - half_pot)) / self.num_combinations;
+        let amount_win = (lookup(2400.0 + half_pot) - original_icm_val) / self.num_combinations;
+
+
+        // Check if half_pot is 2400
+        if (half_pot - 2400.0).abs() < std::f64::EPSILON {
+            amount_lose = -original_icm_val;
+        }
 
         let player_cards = &self.private_cards[player];
         let opponent_cards = &self.private_cards[player ^ 1];
@@ -266,6 +300,7 @@ impl PostFlopGame {
         let amount_lose = (-half_pot / self.bunching_num_combinations) as f32;
         let amount_tie = (-0.5 * rake / self.bunching_num_combinations) as f32;
         let opponent_len = self.private_cards[player ^ 1].len();
+        println!("{}",amount_win);
 
         // someone folded
         if node.player & PLAYER_FOLD_FLAG == PLAYER_FOLD_FLAG {
