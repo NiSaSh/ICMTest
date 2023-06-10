@@ -48,11 +48,11 @@ impl PostFlopGame {
     ) {
         let pot = (self.tree_config.starting_pot + 2 * node.amount) as f64;
         let half_pot = 0.5 * pot;
-        let starting_stack = self.tree_config.effective_stack as f64 + self.tree_config.starting_pot as f64/2;
+        let starting_stack = (self.tree_config.effective_stack + self.tree_config.starting_pot /2) as f64;
         let original_icm_val =  lookup(starting_stack);
         let rake = min(pot * self.tree_config.rake_rate, self.tree_config.rake_cap);
-        let mut amount_lose = -(original_icm_val - lookup(starting_stack  as f64 - half_pot)) / self.num_combinations;
-        let amount_win = (lookup(starting_stack  as f64 + half_pot) - original_icm_val) / self.num_combinations;
+        let mut amount_lose = -(original_icm_val - lookup(starting_stack - half_pot)) / self.num_combinations;
+        let amount_win = (lookup(starting_stack + half_pot) - original_icm_val) / self.num_combinations;
 
 
         // Check if half_pot is 2400
