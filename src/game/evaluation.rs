@@ -4,6 +4,120 @@ use std::mem::MaybeUninit;
 use std::cmp::Ordering;
 use std::thread;
 use std::time::Duration;
+use serde::Deserialize;
+use std::fs::File;
+use std::io::BufReader;
+use once_cell::sync::Lazy;
+
+static UTILITY_FILE: Lazy<UtilityFile> = Lazy::new(|| {
+    let result = UtilityFile::new("C:\\Users\\Nima\\OneDrive\\Desktop\\ICM\\state.json");
+    println!("UTILITY_FILE initialized successfully!");
+    result
+});
+
+#[derive(Debug, Deserialize, Clone)]
+struct Player {
+    index: usize,
+    startingStack: f64,
+    remainingStack: f64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct Utility {
+    s: Vec<f64>,
+    u: Vec<f64>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct UtilityFile {
+    formatType: String,
+    formatVersion: String,
+    pot: f64,
+    #[serde(rename = "bigblind")]
+    bigblind: f64,
+    utilities: Vec<Utility>,
+    players: Vec<Player>,
+}
+
+
+
+impl UtilityFile {
+    pub fn new(file_path: &str) -> Self {
+        let file = File::open(file_path).unwrap();
+        let reader = BufReader::new(file);
+        let mut utility_file: UtilityFile = serde_json::from_reader(reader).unwrap();
+
+        let big_blind = utility_file.bigblind;
+        for utility in &mut utility_file.utilities {
+            for stack in &mut utility.s {
+                *stack /= big_blind / 100.0;
+            }
+        }
+
+        // Normalize startingStack
+        for player in &mut utility_file.players {
+            player.startingStack /= big_blind / 100.0;
+        }
+
+        utility_file
+    }
+
+    pub fn lookup(&self, value: f64, player_id: usize) -> f64 {
+        let normalized_value = value / (self.bigblind / 100.0);
+
+        let mut lower_bound = None;
+        let mut upper_bound = None;
+
+        for utility in &self.utilities {
+            let stack = utility.s[player_id];
+
+            if stack < normalized_value {
+                lower_bound = Some(utility);
+            } else if stack >= normalized_value {
+                upper_bound = Some(utility);
+                break;
+            }
+        }
+
+        match (lower_bound, upper_bound) {
+            (Some(lower), Some(upper)) => {
+                // Linear interpolation
+                let slope = (upper.u[player_id] - lower.u[player_id]) / (upper.s[player_id] - lower.s[player_id]);
+                lower.u[player_id] + slope * (normalized_value - lower.s[player_id])
+            },
+            (Some(lower), None) => {
+                // If there's no upper bound, use the utility of the highest stack
+                lower.u[player_id]
+            },
+            (_, _) => {
+                // If there's no lower or upper bound, return a default value (here 0.0)
+                // or handle this case differently if appropriate
+                0.0
+            },
+        }
+    }
+}
+
+fn get_starting_stack(player_index: usize) -> f64 {
+    let utility_file = &*UTILITY_FILE;
+    
+    // Check if player_index is valid.
+    //if player_index >= utility_file.players.len() {
+        //panic!("Player index out of bounds! Index: {}", player_index);
+    //}
+    utility_file.players[player_index].startingStack
+}
+
+fn get_starting_val(player_index: usize) -> f64 {
+    let utility_file = &*UTILITY_FILE;
+    
+    // Check if player_index is valid.
+    //if player_index >= utility_file.players.len() {
+        //panic!("Player index out of bounds! Index: {}", player_index);
+    //}
+    let postflop_start = utility_file.players[player_index].startingStack;
+    utility_file.lookup(postflop_start,player_index)
+}
 
 
 #[inline]
@@ -15,29 +129,6 @@ fn min(x: f64, y: f64) -> f64 {
     }
 }
 
-
-fn lookup(value: f64) -> f64 {
-    let lookup_table_keys: Vec<f64> = vec![0.0,100.0, 300.0, 500.0, 700.0, 900.0, 1100.0, 1300.0, 1500.0, 1700.0, 1900.0, 2100.0, 2300.0, 2500.0, 2700.0, 2900.0, 3100.0, 3300.0, 3500.0, 3700.0, 3900.0, 4100.0, 4300.0, 4500.0, 4700.0, 4900.0, 5000.0];
-    let lookup_table_values: Vec<f64> = vec![0.0,3.14, 9.23, 15.1, 20.73, 26.16, 31.41, 36.49, 41.41, 46.17, 50.8, 55.29, 59.67, 63.93, 68.09, 72.15, 76.12, 80.0, 83.81, 87.55, 91.21, 94.81, 98.35, 101.84, 105.27, 108.65, 110.33];
-
-    match lookup_table_keys.binary_search_by(|&probe| probe.partial_cmp(&value).unwrap_or(Ordering::Less)) {
-        Ok(index) => lookup_table_values[index],
-        Err(index) => {
-            if index == 0 {
-                lookup_table_values[0]
-            } else if index == lookup_table_keys.len() {
-                lookup_table_values[index - 1]
-            } else {
-                let lower_value = lookup_table_values[index - 1];
-                let upper_value = lookup_table_values[index];
-                let lower_bound = lookup_table_keys[index - 1];
-                let upper_bound = lookup_table_keys[index];
-                lower_value + (upper_value - lower_value) * ((value - lower_bound) / (upper_bound - lower_bound))
-            }
-        }
-    }
-}
-
 impl PostFlopGame {
     pub(super) fn evaluate_internal(
         &self,
@@ -46,19 +137,15 @@ impl PostFlopGame {
         player: usize,
         cfreach: &[f32],
     ) {
+        let utility_file = &*UTILITY_FILE;
         let pot = (self.tree_config.starting_pot + 2 * node.amount) as f64;
         let half_pot = 0.5 * pot;
-        let starting_stack = (self.tree_config.effective_stack + self.tree_config.starting_pot /2) as f64;
-        let original_icm_val =  lookup(starting_stack);
+        let original_icm_val =  get_starting_val(player.into());
+        let starting_stack =get_starting_stack(player.into());
         let rake = min(pot * self.tree_config.rake_rate, self.tree_config.rake_cap);
-        let mut amount_lose = -(original_icm_val - lookup(starting_stack - half_pot)) / self.num_combinations;
-        let amount_win = (lookup(starting_stack + half_pot) - original_icm_val) / self.num_combinations;
+        let mut amount_lose = -(original_icm_val - utility_file.lookup(starting_stack - half_pot,player.into())) / self.num_combinations;
+        let amount_win = (utility_file.lookup(starting_stack + half_pot,player.into()) - original_icm_val) / self.num_combinations;
 
-
-        // Check if half_pot is 2400
-        if (half_pot - 2400.0).abs() < std::f64::EPSILON {
-            amount_lose = -original_icm_val;
-        }
 
         let player_cards = &self.private_cards[player];
         let opponent_cards = &self.private_cards[player ^ 1];
