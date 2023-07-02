@@ -63,35 +63,43 @@ impl UtilityFile {
 
     pub fn lookup(&self, value: f64, player_id: usize) -> f64 {
         let normalized_value = value;
-
-        let mut lower_bound = None;
-        let mut upper_bound = None;
-
-        for utility in &self.utilities {
-            let stack = utility.s[player_id];
-
-            if stack < normalized_value {
-                lower_bound = Some(utility);
-            } else if stack >= normalized_value {
-                upper_bound = Some(utility);
-                break;
-            }
-        }
-
-        match (lower_bound, upper_bound) {
-            (Some(lower), Some(upper)) => {
-                // Linear interpolation
-                let slope = (upper.u[player_id] - lower.u[player_id]) / (upper.s[player_id] - lower.s[player_id]);
-                lower.u[player_id] + slope * (normalized_value - lower.s[player_id])
+    
+        let closest_utils = self.utilities.iter()
+            .filter(|u| u.s.get(player_id).is_some())
+            .min_by(|u1, u2| {
+                let stack1 = u1.s[player_id];
+                let stack2 = u2.s[player_id];
+                let diff1 = (stack1 - normalized_value).abs();
+                let diff2 = (stack2 - normalized_value).abs();
+                diff1.partial_cmp(&diff2).unwrap_or(std::cmp::Ordering::Equal)
+            });
+    
+        match closest_utils {
+            Some(closest) => {
+                let closest_stack = closest.s[player_id];
+                if closest_stack <= normalized_value {
+                    // If closest stack is less than or equal to normalized value, interpolate between it and the next one
+                    let next = self.utilities.iter().find(|u| u.s[player_id] > closest_stack);
+                    match next {
+                        Some(next) => {
+                            let slope = (next.u[player_id] - closest.u[player_id]) / (next.s[player_id] - closest.s[player_id]);
+                            closest.u[player_id] + slope * (normalized_value - closest.s[player_id])
+                        },
+                        None => closest.u[player_id], // If there's no next stack, use the utility of the closest stack
+                    }
+                } else {
+                    // If closest stack is greater than normalized value, interpolate between it and the previous one
+                    let prev = self.utilities.iter().rev().find(|u| u.s[player_id] < closest_stack);
+                    match prev {
+                        Some(prev) => {
+                            let slope = (closest.u[player_id] - prev.u[player_id]) / (closest.s[player_id] - prev.s[player_id]);
+                            prev.u[player_id] + slope * (normalized_value - prev.s[player_id])
+                        },
+                        None => closest.u[player_id], // If there's no previous stack, use the utility of the closest stack
+                    }
+                }
             },
-            (Some(lower), None) => {
-                // If there's no upper bound, use the utility of the highest stack
-                lower.u[player_id]
-            },
-            (_, _) => {
-                // If there's no lower or upper bound, return a default value (here 0.0)
-                0.0
-            },
+            None => 0.0, // If there's no closest utility, return a default value (here 0.0)
         }
     }
 }
