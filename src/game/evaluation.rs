@@ -10,9 +10,9 @@ use std::io::BufReader;
 use once_cell::sync::Lazy;
 
 static UTILITY_FILE: Lazy<UtilityFile> = Lazy::new(|| {
-    let result = UtilityFile::new("C:\\Users\\Nima\\OneDrive\\Desktop\\ICM\\state.json");
+    let utility_file = UtilityFile::new("C:\\Users\\Nima\\OneDrive\\Desktop\\ICM\\state.json");
     println!("UTILITY_FILE initialized successfully!");
-    result
+    utility_file
 });
 
 #[derive(Debug, Deserialize, Clone)]
@@ -39,31 +39,30 @@ struct UtilityFile {
     players: Vec<Player>,
 }
 
-
-
 impl UtilityFile {
     pub fn new(file_path: &str) -> Self {
         let file = File::open(file_path).unwrap();
         let reader = BufReader::new(file);
         let mut utility_file: UtilityFile = serde_json::from_reader(reader).unwrap();
 
-        let big_blind = utility_file.bigblind;
+        // Normalize 's' values
+        let bigblind = utility_file.bigblind;
         for utility in &mut utility_file.utilities {
             for stack in &mut utility.s {
-                *stack /= big_blind / 100.0;
+                *stack = (*stack / bigblind) * 100.0;
             }
         }
 
         // Normalize startingStack
         for player in &mut utility_file.players {
-            player.startingStack /= big_blind / 100.0;
+            player.startingStack = (player.startingStack / bigblind) * 100.0;
         }
 
         utility_file
     }
 
     pub fn lookup(&self, value: f64, player_id: usize) -> f64 {
-        let normalized_value = value / (self.bigblind / 100.0);
+        let normalized_value = value;
 
         let mut lower_bound = None;
         let mut upper_bound = None;
@@ -91,13 +90,11 @@ impl UtilityFile {
             },
             (_, _) => {
                 // If there's no lower or upper bound, return a default value (here 0.0)
-                // or handle this case differently if appropriate
                 0.0
             },
         }
     }
 }
-
 fn get_starting_stack(player_index: usize) -> f64 {
     let utility_file = &*UTILITY_FILE;
     
@@ -137,6 +134,7 @@ impl PostFlopGame {
         player: usize,
         cfreach: &[f32],
     ) {
+       
         let utility_file = &*UTILITY_FILE;
         let pot = (self.tree_config.starting_pot + 2 * node.amount) as f64;
         let half_pot = 0.5 * pot;
